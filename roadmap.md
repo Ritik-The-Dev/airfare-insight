@@ -1,0 +1,4 @@
+- [ ] Build FareLens frontend search and results experience
+- [ ] Add sources page and shared metadata/navigation
+- [ ] Add FastAPI scraper service, normalized models, orchestrator, adapters, and Docker setup
+- [ ] Verify build, lint, routes, and responsive preview
