@@ -12,4 +12,16 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  vite: {
+    server: {
+      proxy: {
+        // Proxy /api/* → FastAPI backend running on :8000
+        // This avoids CORS issues in dev and works even if VITE_API_BASE_URL is not set.
+        "/api": {
+          target: "http://localhost:8000",
+          changeOrigin: true,
+        },
+      },
+    },
+  },
 });

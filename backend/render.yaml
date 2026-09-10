@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: farelens-api
+    runtime: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements-prod.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: IGNAV_API_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        value: '["https://your-app.vercel.app","http://localhost:5173"]'
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CACHE_TTL
+        value: "60"
+      - key: SCRAPER_TIMEOUT
+        value: "30"
+      - key: DEMO_MODE
+        value: "false"
+      - key: PLAYWRIGHT_HEADLESS
+        value: "true"

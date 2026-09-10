@@ -89,7 +89,14 @@ export const SOURCE_CATALOG: SourceSummary[] = [
   })),
 ];
 
-export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+// In dev, Vite proxies /api/* → http://localhost:8000 so we can use relative paths.
+// In prod, set VITE_API_BASE_URL to the deployed backend URL (e.g. https://api.farelens.in).
+// Relative "" means requests go to the same origin (proxy handles it in dev).
+export const API_BASE_URL: string = (
+  typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL
+    ? (import.meta.env.VITE_API_BASE_URL as string).replace(/\/$/, "")
+    : ""
+);
 
 export function formatINR(value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) return "—";

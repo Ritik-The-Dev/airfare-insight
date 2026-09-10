@@ -1,206 +1,667 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowRight, ArrowUpDown, Check, ChevronDown, CircleAlert, Clock3, ExternalLink, Filter, Gauge, Menu, RefreshCw, Search, SlidersHorizontal, X } from "lucide-react";
-import {
-  AIRPORTS,
-  API_BASE_URL,
-  type Airport,
-  type FlightResult,
-  type SearchState,
-  type SourceStatus,
-  type SourceSummary,
-  formatDate,
-  formatDuration,
-  formatINR,
-  formatTime,
-  relativeAge,
-  displayStatus,
-} from "@/lib/farelens";
+import { CircleAlert } from "lucide-react";
+import { API_BASE_URL, formatINR } from "@/lib/farelens";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "FareLens — Know the fare before you book" },
-      { name: "description", content: "Compare live airfare across Indian airlines and travel platforms in one clear view." },
-      { property: "og:title", content: "FareLens — Know the fare before you book" },
-      { property: "og:description", content: "Compare live airfare across Indian airlines and travel platforms in one clear view." },
+      { title: "FareLens — India Airfare Price Index" },
+      { name: "description", content: "A real-time price index computed from live and historical fare observations across domestic routes." },
+      { property: "og:title", content: "FareLens — India Airfare Price Index" },
+      { property: "og:description", content: "Tracking the cost of air travel across India." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
-  component: FareLensHome,
+  component: CPIDashboard,
 });
 
-type SortKey = "cheapest" | "fastest" | "earliest";
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
-function FareLensHome() {
-  const [from, setFrom] = useState<Airport | null>(null);
-  const [to, setTo] = useState<Airport | null>(null);
-  const [departure, setDeparture] = useState("");
-  const [returnDate, setReturnDate] = useState("");
-  const [passengers, setPassengers] = useState("1");
-  const [cabin, setCabin] = useState("Economy");
-  const [query, setQuery] = useState<SearchState | null>(null);
-  const [error, setError] = useState("");
-  const [isSearching, setIsSearching] = useState(false);
-  const [sort, setSort] = useState<SortKey>("cheapest");
-  const [selectedAirline, setSelectedAirline] = useState("All airlines");
-  const [selectedStops, setSelectedStops] = useState("Any stops");
-  const [showFilters, setShowFilters] = useState(false);
-  const [showSystem, setShowSystem] = useState(false);
-  const [mobileMenu, setMobileMenu] = useState(false);
+type MonthlyIndexEntry = {
+  month: string;
+  index: number;
+  avg_fare: number;
+  observation_count: number;
+  data_type_mix: { MOCK: number; LIVE: number };
+};
+
+type RouteIndex = {
+  route: string;
+  monthly_index: MonthlyIndexEntry[];
+};
+
+type AirfareIndexResponse = {
+  base_period: string;
+  base_index: number;
+  methodology: string;
+  data_disclaimer: string;
+  monthly_index: MonthlyIndexEntry[];
+  route_indices: RouteIndex[];
+};
+
+type ObservationSummary = {
+  total_observations: number;
+  live_observations: number;
+  mock_observations: number;
+  routes_count: number;
+  airlines_count: number;
+  sources_count: number;
+  latest_observation: string | null;
+};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatMonthLabel(yyyyMM: string): string {
+  const [year, month] = yyyyMM.split("-");
+  const date = new Date(Number(year), Number(month) - 1, 1);
+  return date.toLocaleString("en-IN", { month: "long", year: "numeric" });
+}
+
+function formatMonthShort(yyyyMM: string): string {
+  const [year, month] = yyyyMM.split("-");
+  const date = new Date(Number(year), Number(month) - 1, 1);
+  return date.toLocaleString("en-IN", { month: "short", year: "numeric" });
+}
+
+function dataTypeBadge(mix: { MOCK: number; LIVE: number }): string {
+  if (mix.LIVE === 0) return "MOCK";
+  if (mix.MOCK === 0) return "LIVE";
+  return "MIXED";
+}
+
+// ---------------------------------------------------------------------------
+// Skeleton placeholder
+// ---------------------------------------------------------------------------
+function Skeleton({ className = "" }: { className?: string }) {
+  return <div className={`animate-pulse rounded bg-muted ${className}`} />;
+}
+
+// ---------------------------------------------------------------------------
+// Route airlines map (display only)
+// ---------------------------------------------------------------------------
+const ROUTE_AIRLINES: Record<string, string> = {
+  "DEL-BOM": "IndiGo · Air India · Akasa · SpiceJet",
+  "DEL-BLR": "IndiGo · Air India · Akasa",
+  "BOM-BLR": "IndiGo · Air India · SpiceJet",
+  "DEL-HYD": "IndiGo · Air India · Akasa",
+  "DEL-MAA": "IndiGo · Air India · SpiceJet",
+  "BOM-DEL": "IndiGo · Air India · Akasa · SpiceJet",
+};
+
+// ---------------------------------------------------------------------------
+// Sparkline — simple div-based bar chart, no recharts dependency
+// ---------------------------------------------------------------------------
+function Sparkline({ data }: { data: MonthlyIndexEntry[] }) {
+  if (data.length === 0) return null;
+  const values = data.map((d) => d.index);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+
+  return (
+    <div className="flex items-end gap-0.5" style={{ height: 32 }} aria-hidden>
+      {values.map((v, i) => {
+        const heightPct = Math.max(10, Math.round(((v - min) / range) * 100));
+        return (
+          <div
+            key={i}
+            className="flex-1 bg-primary/60 rounded-sm"
+            style={{ height: `${heightPct}%` }}
+            title={`${data[i]?.month ?? ""}: ${v}`}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+function CPIDashboard() {
+  const [indexData, setIndexData] = useState<AirfareIndexResponse | null>(null);
+  const [summary, setSummary] = useState<ObservationSummary | null>(null);
+  const [indexLoading, setIndexLoading] = useState(true);
+  const [summaryLoading, setSummaryLoading] = useState(true);
 
   useEffect(() => {
-    if (!query || query.status !== "searching" || !API_BASE_URL) return;
-    const timer = window.setInterval(async () => {
-      try {
-        const response = await fetch(`${API_BASE_URL}/api/flights/search/${query.search_id}`);
-        if (response.ok) {
-          const next = (await response.json()) as SearchState;
-          setQuery(next);
-          if (next.status !== "searching") setIsSearching(false);
-        }
-      } catch {
-        setIsSearching(false);
-      }
-    }, 1200);
-    return () => window.clearInterval(timer);
-  }, [query]);
+    fetch(`${API_BASE_URL}/api/airfare-index`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) setIndexData(data as AirfareIndexResponse);
+      })
+      .catch(() => undefined)
+      .finally(() => setIndexLoading(false));
+  }, []);
 
-  const airlines = useMemo(() => [...new Set((query?.flights ?? []).map((flight) => flight.airline))], [query]);
-  const flights = useMemo(() => {
-    const filtered = (query?.flights ?? []).filter((flight) => {
-      const airlineMatch = selectedAirline === "All airlines" || flight.airline === selectedAirline;
-      const stopsMatch = selectedStops === "Any stops" || (selectedStops === "Non-stop" ? flight.stops === 0 : flight.stops > 0);
-      return airlineMatch && stopsMatch;
-    });
-    return [...filtered].sort((a, b) => {
-      if (sort === "fastest") return a.duration_minutes - b.duration_minutes;
-      if (sort === "earliest") return new Date(a.departure_time).getTime() - new Date(b.departure_time).getTime();
-      return a.total_fare - b.total_fare;
-    });
-  }, [query, selectedAirline, selectedStops, sort]);
-  const lowest = flights[0];
-  const liveSources = (query?.sources ?? []).filter((source) => source.status === "live");
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/api/fare-observations/summary`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) setSummary(data as ObservationSummary);
+      })
+      .catch(() => undefined)
+      .finally(() => setSummaryLoading(false));
+  }, []);
 
-  async function searchLiveFares(event: React.FormEvent) {
-    event.preventDefault();
-    setError("");
-    if (!from || !to || !departure) {
-      setError("Choose an origin, destination, and departure date to search live fares.");
-      return;
-    }
-    if (from.code === to.code) {
-      setError("Origin and destination must be different airports.");
-      return;
-    }
-    if (!API_BASE_URL) {
-      setError("The live search service is not connected in this preview. No sample fares have been added.");
-      setQuery(null);
-      return;
-    }
-    setIsSearching(true);
-    setQuery(null);
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/flights/search`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ origin: from.code, destination: to.code, departure_date: departure, return_date: returnDate || null, passengers: Number(passengers), cabin_class: cabin }),
-      });
-      if (!response.ok) throw new Error("Search service unavailable");
-      const next = (await response.json()) as SearchState;
-      setQuery(next);
-    } catch {
-      setIsSearching(false);
-      setError("Live fares could not be retrieved right now. Please check the service and try again.");
-    }
-  }
-
-  function swapAirports() {
-    setFrom(to);
-    setTo(from);
-  }
+  const monthly = indexData?.monthly_index ?? [];
+  const latest = monthly[monthly.length - 1] ?? null;
+  const prev = monthly[monthly.length - 2] ?? null;
+  const indexChange = latest && prev ? latest.index - prev.index : null;
+  const basePeriodLabel = indexData?.base_period
+    ? formatMonthLabel(indexData.base_period)
+    : null;
 
   return (
     <main className="min-h-screen bg-background">
+
+      {/* ------------------------------------------------------------------ */}
+      {/* HEADER                                                               */}
+      {/* ------------------------------------------------------------------ */}
       <header className="mx-auto flex max-w-7xl items-center justify-between px-5 py-5 lg:px-10">
         <Link to="/" className="flex items-center gap-3 text-foreground" aria-label="FareLens home">
-          <span className="flex size-9 items-center justify-center bg-primary text-sm font-semibold text-primary-foreground">FL</span>
+          <span className="flex size-9 items-center justify-center bg-primary text-sm font-semibold text-primary-foreground">
+            FL
+          </span>
           <span className="text-xl font-semibold tracking-tight">FareLens</span>
         </Link>
-        <nav className={`${mobileMenu ? "flex" : "hidden"} absolute left-5 right-5 top-20 z-10 flex-col gap-4 border border-border bg-card p-5 text-sm shadow-sm md:static md:flex md:flex-row md:items-center md:border-0 md:bg-transparent md:p-0 md:shadow-none`}>
-          <a href="#search" className="text-foreground/75 transition-colors hover:text-foreground">Search</a>
-          <a href="#how-it-works" className="text-foreground/75 transition-colors hover:text-foreground">How it works</a>
-          <Link to="/sources" className="text-foreground/75 transition-colors hover:text-foreground">Sources</Link>
+
+        <nav className="hidden items-center gap-6 text-sm md:flex">
+          <Link to="/" className="font-medium text-foreground">Dashboard</Link>
+          <Link to="/search" className="text-foreground/70 transition-colors hover:text-foreground">Search Flights</Link>
+          <Link to="/sources" className="text-foreground/70 transition-colors hover:text-foreground">Sources</Link>
         </nav>
-        <div className="flex items-center gap-3">
-          <span className="hidden items-center gap-2 text-xs font-medium text-foreground/70 sm:flex"><span className="size-2 rounded-full bg-primary" /> Live data</span>
-          <button className="inline-flex size-9 items-center justify-center border border-border md:hidden" onClick={() => setMobileMenu((value) => !value)} aria-label="Open navigation"><Menu size={17} /></button>
-        </div>
+
+        <span className="editorial-label rounded border border-border bg-muted px-2.5 py-1 text-muted-foreground">
+          SIH26056 Prototype
+        </span>
       </header>
 
-      <section className="mx-auto max-w-7xl px-5 pb-16 pt-12 lg:px-10 lg:pb-24 lg:pt-20">
-        <div className="max-w-3xl">
-          <p className="editorial-label mb-5 text-primary">India’s live airfare view</p>
-          <h1 className="max-w-2xl text-5xl leading-[0.98] text-foreground sm:text-7xl">Know the fare before you book.</h1>
-          <p className="mt-6 max-w-xl text-base leading-7 text-muted-foreground">Compare live airfare across Indian airlines and travel platforms in one place. No estimates. No noise.</p>
+      {/* ------------------------------------------------------------------ */}
+      {/* HERO                                                                 */}
+      {/* ------------------------------------------------------------------ */}
+      <section className="mx-auto max-w-7xl px-5 pb-16 pt-12 lg:px-10 lg:pb-20 lg:pt-20">
+        <p className="editorial-label text-primary">India Airfare Price Index</p>
+        <h1 className="mt-5 max-w-2xl text-5xl leading-[0.97] sm:text-7xl">
+          Tracking the cost of air travel across India.
+        </h1>
+        <p className="mt-6 max-w-xl text-base leading-7 text-muted-foreground">
+          A real-time price index computed from live and historical fare observations across domestic routes.
+        </p>
+        <div className="mt-8 flex flex-wrap items-center gap-4">
+          <Link
+            to="/search"
+            className="inline-flex h-11 items-center gap-2 bg-primary px-5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            Search Live Fares →
+          </Link>
+          <a
+            href="#methodology"
+            className="inline-flex h-11 items-center gap-2 border border-border px-5 text-sm font-medium text-foreground/80 transition-colors hover:bg-muted"
+          >
+            View methodology ↓
+          </a>
         </div>
+      </section>
 
-        <form id="search" onSubmit={searchLiveFares} className="mt-12 border border-border bg-card p-4 shadow-sm sm:p-6">
-          <div className="grid gap-3 lg:grid-cols-[1fr_auto_1fr_1fr_1fr] lg:items-end">
-            <AirportField label="From" value={from} onChange={setFrom} exclude={to?.code} />
-            <button type="button" onClick={swapAirports} className="mb-1 inline-flex size-10 items-center justify-center self-end border border-border text-primary transition-colors hover:bg-muted" aria-label="Swap origin and destination"><ArrowUpDown size={17} /></button>
-            <AirportField label="To" value={to} onChange={setTo} exclude={from?.code} />
-            <label className="block"><span className="editorial-label mb-2 block text-muted-foreground">Departure</span><input type="date" value={departure} onChange={(event) => setDeparture(event.target.value)} className="h-12 w-full border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" /></label>
-            <label className="block"><span className="editorial-label mb-2 block text-muted-foreground">Return <span className="normal-case tracking-normal">optional</span></span><input type="date" value={returnDate} min={departure} onChange={(event) => setReturnDate(event.target.value)} className="h-12 w-full border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" /></label>
+      {/* ------------------------------------------------------------------ */}
+      {/* INDEX HEADLINE                                                       */}
+      {/* ------------------------------------------------------------------ */}
+      <section className="page-rule mx-auto max-w-7xl px-5 py-12 lg:px-10 lg:py-16">
+        <p className="editorial-label text-primary">Current index value</p>
+
+        {indexLoading ? (
+          <div className="mt-6 border border-border bg-card p-8">
+            <Skeleton className="h-20 w-48" />
+            <Skeleton className="mt-4 h-5 w-72" />
+            <Skeleton className="mt-3 h-4 w-52" />
           </div>
-          <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-end sm:justify-between">
-            <div className="grid grid-cols-2 gap-3 sm:flex sm:items-end">
-              <label><span className="editorial-label mb-2 block text-muted-foreground">Passengers</span><select value={passengers} onChange={(event) => setPassengers(event.target.value)} className="h-11 min-w-32 border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"><option value="1">1 passenger</option><option value="2">2 passengers</option><option value="3">3 passengers</option><option value="4">4 passengers</option></select></label>
-              <label><span className="editorial-label mb-2 block text-muted-foreground">Cabin</span><select value={cabin} onChange={(event) => setCabin(event.target.value)} className="h-11 min-w-32 border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"><option>Economy</option><option>Premium Economy</option><option>Business</option></select></label>
+        ) : latest ? (
+          <div className="mt-6 border border-border bg-card p-8">
+            <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <div className="flex items-end gap-4">
+                  <span className="text-7xl font-light tabular-nums leading-none">
+                    {latest.index.toFixed(1)}
+                  </span>
+                  {indexChange !== null && (
+                    <span
+                      className={`mb-1 text-xl font-medium tabular-nums ${
+                        indexChange > 0 ? "text-destructive" : "text-primary"
+                      }`}
+                    >
+                      {indexChange > 0 ? "▲" : "▼"} {Math.abs(indexChange).toFixed(1)} pts
+                    </span>
+                  )}
+                </div>
+                <p className="mt-3 text-sm text-muted-foreground">
+                  {formatMonthLabel(latest.month)} · vs{" "}
+                  {basePeriodLabel ? `${basePeriodLabel} baseline = 100` : "base period = 100"}
+                </p>
+                {indexChange !== null && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {indexChange > 0 ? "+" : ""}{indexChange.toFixed(1)}% month-on-month
+                    {indexChange > 0 ? " — fares rising" : " — fares falling"}
+                  </p>
+                )}
+              </div>
+              <div className="flex flex-col gap-3 text-sm text-muted-foreground">
+                <div className="flex items-center justify-between gap-8 border-t border-border pt-3 sm:flex-col sm:items-end sm:border-0 sm:pt-0">
+                  <span className="text-xs text-muted-foreground/70">Observations this month</span>
+                  <span className="font-semibold text-foreground">{latest.observation_count.toLocaleString("en-IN")}</span>
+                </div>
+                <div className="flex items-center justify-between gap-8 sm:flex-col sm:items-end">
+                  <span className="text-xs text-muted-foreground/70">Average fare</span>
+                  <span className="font-semibold text-foreground">{formatINR(latest.avg_fare)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-8 sm:flex-col sm:items-end">
+                  <span className="text-xs text-muted-foreground/70">Data type</span>
+                  <DataTypeBadge mix={latest.data_type_mix} />
+                </div>
+              </div>
             </div>
-            <button type="submit" disabled={isSearching} className="inline-flex h-12 items-center justify-center gap-3 bg-primary px-6 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-wait disabled:opacity-70"><Search size={17} /> {isSearching ? "Fetching live fares" : "Search live fares"}<ArrowRight size={16} /></button>
           </div>
-          {error && <p className="mt-4 flex items-center gap-2 text-sm text-destructive"><CircleAlert size={15} /> {error}</p>}
-        </form>
+        ) : (
+          <div className="mt-6 border border-border bg-card p-8 text-sm text-muted-foreground">
+            Index data is unavailable. Check that the backend is running.
+          </div>
+        )}
       </section>
 
-      {isSearching && <LoadingPanel sources={query?.sources ?? []} />}
-      {query && !isSearching && <ResultsPanel query={query} flights={flights} lowest={lowest} liveSources={liveSources} sort={sort} setSort={setSort} airlines={airlines} selectedAirline={selectedAirline} setSelectedAirline={setSelectedAirline} selectedStops={selectedStops} setSelectedStops={setSelectedStops} showFilters={showFilters} setShowFilters={setShowFilters} onRefresh={() => { setQuery(null); setTimeout(() => void searchLiveFares({ preventDefault() {} } as React.FormEvent), 0); }} showSystem={showSystem} setShowSystem={setShowSystem} from={from} to={to} departure={departure} passengers={passengers} cabin={cabin} />}
+      {/* ------------------------------------------------------------------ */}
+      {/* MONTHLY INDEX TABLE                                                  */}
+      {/* ------------------------------------------------------------------ */}
+      <section className="page-rule mx-auto max-w-7xl px-5 py-12 lg:px-10 lg:py-16">
+        <div className="flex flex-col gap-1">
+          <p className="editorial-label text-primary">Monthly series</p>
+          <h2 className="mt-2 text-4xl">India Domestic Airfare Price Index</h2>
+          {basePeriodLabel && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              Base Period: {basePeriodLabel} = 100 &nbsp;·&nbsp; Simple average fare index
+            </p>
+          )}
+        </div>
 
-      <section id="how-it-works" className="page-rule mx-auto grid max-w-7xl gap-8 px-5 py-16 lg:grid-cols-[1fr_2fr] lg:px-10 lg:py-24">
-        <div><p className="editorial-label text-primary">How it works</p><h2 className="mt-4 text-4xl leading-tight">A clearer read on a moving market.</h2></div>
-        <div className="grid gap-8 sm:grid-cols-3">
-          {[{ number: "01", title: "Retrieve", text: "Airline and travel platform sources are queried in parallel when you search." }, { number: "02", title: "Normalize", text: "Different fare formats are brought into one consistent flight result." }, { number: "03", title: "Compare", text: "See what is live, what is unavailable, and which fare is lowest right now." }].map((item) => <div key={item.number} className="border-t border-border pt-4"><span className="text-sm font-semibold text-accent-foreground">{item.number}</span><h3 className="mt-8 text-3xl">{item.title}</h3><p className="mt-3 text-sm leading-6 text-muted-foreground">{item.text}</p></div>)}
+        <div className="mt-8 overflow-x-auto border border-border">
+          {/* Table header */}
+          <div className="hidden grid-cols-[1.6fr_0.8fr_1fr_0.8fr_1fr_0.7fr] gap-4 border-b border-border bg-muted/50 px-5 py-3 text-xs font-semibold uppercase tracking-[0.13em] text-muted-foreground sm:grid">
+            <span>Month</span>
+            <span className="text-right">Index</span>
+            <span className="text-right">Avg Fare</span>
+            <span className="text-right">Change</span>
+            <span className="text-right">Obs. Count</span>
+            <span className="text-right">Data</span>
+          </div>
+
+          {indexLoading ? (
+            <div className="space-y-0">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="border-b border-border px-5 py-4">
+                  <Skeleton className="h-5 w-full" />
+                </div>
+              ))}
+            </div>
+          ) : monthly.length === 0 ? (
+            <div className="px-5 py-10 text-center text-sm text-muted-foreground">
+              No index data available.
+            </div>
+          ) : (
+            monthly.map((row, i) => {
+              const prevRow = monthly[i - 1] ?? null;
+              const change = prevRow ? row.index - prevRow.index : null;
+              const badge = dataTypeBadge(row.data_type_mix);
+              const isBase = i === 0;
+
+              return (
+                <div
+                  key={row.month}
+                  className={`grid gap-3 border-b border-border px-5 py-4 last:border-b-0 sm:grid-cols-[1.6fr_0.8fr_1fr_0.8fr_1fr_0.7fr] sm:items-center sm:gap-4 ${
+                    isBase ? "bg-muted/30" : ""
+                  }`}
+                >
+                  {/* Month */}
+                  <div className="flex items-center gap-2">
+                    {isBase && (
+                      <span className="editorial-label rounded bg-primary/10 px-1.5 py-0.5 text-primary">
+                        BASE
+                      </span>
+                    )}
+                    <span className="text-sm font-medium">{formatMonthLabel(row.month)}</span>
+                  </div>
+
+                  {/* Index */}
+                  <span className="text-right text-sm font-semibold tabular-nums">
+                    {row.index.toFixed(1)}
+                  </span>
+
+                  {/* Avg Fare */}
+                  <span className="text-right text-sm tabular-nums">
+                    {formatINR(row.avg_fare)}
+                  </span>
+
+                  {/* Change */}
+                  <span
+                    className={`text-right text-sm tabular-nums font-medium ${
+                      change === null
+                        ? "text-muted-foreground"
+                        : change > 0
+                        ? "text-destructive"
+                        : "text-primary"
+                    }`}
+                  >
+                    {change === null
+                      ? "—"
+                      : `${change > 0 ? "▲" : "▼"} ${Math.abs(change).toFixed(1)}%`}
+                  </span>
+
+                  {/* Obs count */}
+                  <span className="text-right text-sm tabular-nums text-muted-foreground">
+                    {row.observation_count.toLocaleString("en-IN")}
+                  </span>
+
+                  {/* Data badge */}
+                  <div className="flex justify-end">
+                    <DataTypeBadge mix={row.data_type_mix} label={badge} />
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {indexData?.data_disclaimer && (
+          <p className="mt-4 flex items-start gap-2 text-xs text-muted-foreground">
+            <CircleAlert size={13} className="mt-0.5 shrink-0" />
+            {indexData.data_disclaimer}
+          </p>
+        )}
+      </section>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* ROUTE-LEVEL BREAKDOWN                                                */}
+      {/* ------------------------------------------------------------------ */}
+      <section className="page-rule mx-auto max-w-7xl px-5 py-12 lg:px-10 lg:py-16">
+        <p className="editorial-label text-primary">Route breakdown</p>
+        <h2 className="mt-2 text-4xl">Route-Level Fare Index</h2>
+        <p className="mt-3 text-sm text-muted-foreground">
+          Index computed independently for each route. Base = 100 at each route's earliest observation.
+        </p>
+
+        {indexLoading ? (
+          <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <div key={i} className="border border-border bg-card p-5">
+                <Skeleton className="h-5 w-32" />
+                <Skeleton className="mt-3 h-10 w-20" />
+                <Skeleton className="mt-3 h-8 w-full" />
+              </div>
+            ))}
+          </div>
+        ) : indexData?.route_indices && indexData.route_indices.length > 0 ? (
+          <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {indexData.route_indices.map((ri) => {
+              const [orig, dest] = ri.route.split("-");
+              const latestRI = ri.monthly_index[ri.monthly_index.length - 1];
+              const prevRI = ri.monthly_index[ri.monthly_index.length - 2] ?? null;
+              const riChange = latestRI && prevRI ? latestRI.index - prevRI.index : null;
+              const airlines = ROUTE_AIRLINES[ri.route] ?? "IndiGo · Air India";
+
+              return (
+                <div key={ri.route} className="border border-border bg-card p-5">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="editorial-label text-muted-foreground">Route</p>
+                      <p className="mt-1 text-xl font-medium">
+                        {orig} <span className="text-muted-foreground">→</span> {dest}
+                      </p>
+                    </div>
+                    {latestRI && (
+                      <span
+                        className={`text-sm font-semibold tabular-nums ${
+                          riChange === null
+                            ? "text-muted-foreground"
+                            : riChange > 0
+                            ? "text-destructive"
+                            : "text-primary"
+                        }`}
+                      >
+                        {riChange !== null
+                          ? `${riChange > 0 ? "▲" : "▼"} ${Math.abs(riChange).toFixed(1)}`
+                          : "Base"}
+                      </span>
+                    )}
+                  </div>
+
+                  {latestRI && (
+                    <div className="mt-4">
+                      <span className="text-4xl font-light tabular-nums">
+                        {latestRI.index.toFixed(1)}
+                      </span>
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {formatMonthShort(latestRI.month)}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="mt-4">
+                    <Sparkline data={ri.monthly_index} />
+                  </div>
+
+                  <p className="mt-3 text-xs text-muted-foreground">{airlines}</p>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="mt-8 text-sm text-muted-foreground">
+            Route breakdown unavailable.
+          </p>
+        )}
+      </section>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* KEY STATISTICS ROW                                                   */}
+      {/* ------------------------------------------------------------------ */}
+      <section className="page-rule mx-auto max-w-7xl px-5 py-12 lg:px-10 lg:py-16">
+        <p className="editorial-label text-primary">Data coverage</p>
+        <h2 className="mt-2 text-4xl">Key Statistics</h2>
+
+        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard
+            label="Total Observations"
+            value={
+              summaryLoading
+                ? null
+                : (summary?.total_observations ?? 0).toLocaleString("en-IN")
+            }
+            note="All data types"
+          />
+          <StatCard
+            label="Live Observations"
+            value={
+              summaryLoading
+                ? null
+                : (summary?.live_observations ?? 0).toLocaleString("en-IN")
+            }
+            note="From Ignav API"
+          />
+          <StatCard
+            label="Routes Monitored"
+            value={
+              summaryLoading
+                ? null
+                : (summary?.routes_count ?? 0).toString()
+            }
+            note="Domestic routes"
+          />
+          <StatCard
+            label="Airlines Tracked"
+            value={
+              summaryLoading
+                ? null
+                : (summary?.airlines_count ?? 0).toString()
+            }
+            note="IndiGo, Air India, Akasa, SpiceJet"
+          />
         </div>
       </section>
-      <footer className="mx-auto flex max-w-7xl flex-col gap-3 px-5 py-8 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between lg:px-10"><span>FareLens · SIH26056 prototype</span><span>Live source transparency, always.</span></footer>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* METHODOLOGY                                                          */}
+      {/* ------------------------------------------------------------------ */}
+      <section
+        id="methodology"
+        className="page-rule mx-auto max-w-7xl px-5 py-12 lg:px-10 lg:py-16"
+      >
+        <p className="editorial-label text-primary">Methodology</p>
+        <h2 className="mt-2 text-4xl">How the index is computed</h2>
+
+        <div className="mt-8 grid gap-8 lg:grid-cols-[2fr_1fr]">
+          <div className="space-y-6 text-sm leading-7 text-muted-foreground">
+            <div>
+              <h3 className="mb-2 text-base text-foreground">What the index measures</h3>
+              <p>
+                The India Domestic Airfare Price Index tracks changes in the average fare paid for
+                economy-class domestic air travel. It is expressed as a number relative to a fixed
+                base period, which equals 100. A reading of 105 means fares are 5% higher than
+                the base period.
+              </p>
+            </div>
+            <div>
+              <h3 className="mb-2 text-base text-foreground">Base period definition</h3>
+              <p>
+                The base period is the earliest calendar month for which fare observations are
+                available in the system. All subsequent months are indexed against the average fare
+                of that month. Formula:{" "}
+                <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
+                  Index = (avg_fare / base_avg_fare) × 100
+                </code>
+              </p>
+            </div>
+            <div>
+              <h3 className="mb-2 text-base text-foreground">Data sources</h3>
+              <p>
+                <strong className="text-foreground">LIVE</strong> — fares retrieved in real time
+                from the Ignav Aviato API, covering IndiGo, Air India, Akasa Air, and SpiceJet on
+                major domestic routes.
+              </p>
+              <p className="mt-2">
+                <strong className="text-foreground">MOCK</strong> — synthetic fares generated as
+                prototype data to demonstrate index computation while live data accumulates.
+              </p>
+            </div>
+            <div className="rounded border border-border bg-muted/40 p-4">
+              <p className="flex items-start gap-2 text-xs">
+                <CircleAlert size={13} className="mt-0.5 shrink-0 text-muted-foreground" />
+                <span>
+                  <strong className="text-foreground">Disclaimer:</strong> MOCK data is synthetic
+                  prototype data. FareLens is a SIH26056 student prototype. Index values are not
+                  official government statistics and should not be used for commercial or policy
+                  decisions.
+                </span>
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="border border-border bg-card p-5">
+              <p className="editorial-label text-muted-foreground">Index formula</p>
+              <pre className="mt-3 overflow-x-auto text-xs text-foreground">
+{`Index(m) = 
+  avg_fare(m) / avg_fare(base) × 100`}
+              </pre>
+            </div>
+            <div className="border border-border bg-card p-5">
+              <p className="editorial-label text-muted-foreground">Covered routes</p>
+              <ul className="mt-3 space-y-1 text-sm text-muted-foreground">
+                {["DEL–BOM", "DEL–BLR", "BOM–BLR", "DEL–HYD", "DEL–MAA", "BOM–DEL"].map((r) => (
+                  <li key={r} className="flex items-center gap-2">
+                    <span className="size-1.5 rounded-full bg-primary" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* FOOTER                                                               */}
+      {/* ------------------------------------------------------------------ */}
+      <footer className="page-rule mx-auto max-w-7xl px-5 py-8 text-xs text-muted-foreground lg:px-10">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <span>FareLens · SIH26056 · India Domestic Airfare Price Index Prototype</span>
+          <div className="flex items-center gap-4">
+            <Link to="/search" className="hover:text-foreground">Search Fares</Link>
+            <Link to="/sources" className="hover:text-foreground">Sources</Link>
+            <a href="#methodology" className="hover:text-foreground">Methodology</a>
+          </div>
+        </div>
+        <p className="mt-2 max-w-xl leading-5">
+          Data disclaimer: Index values are computed from prototype observations and may include
+          synthetic MOCK data. Not official government statistics.
+        </p>
+      </footer>
     </main>
   );
 }
 
-function AirportField({ label, value, onChange, exclude }: { label: string; value: Airport | null; onChange: (airport: Airport | null) => void; exclude?: string }) {
-  const [input, setInput] = useState(value ? `${value.code} · ${value.city}` : "");
-  const [open, setOpen] = useState(false);
-  const matches = AIRPORTS.filter((airport) => airport.code !== exclude && `${airport.city} ${airport.code} ${airport.name}`.toLowerCase().includes(input.toLowerCase())).slice(0, 5);
-  return <div className="relative"><label className="block"><span className="editorial-label mb-2 block text-muted-foreground">{label}</span><div className="relative"><input value={input} onFocus={() => setOpen(true)} onChange={(event) => { setInput(event.target.value); onChange(null); setOpen(true); }} placeholder="City or airport" className="h-12 w-full border border-input bg-background px-3 pr-8 text-sm outline-none focus:ring-2 focus:ring-ring" />{value && <button type="button" onClick={() => { onChange(null); setInput(""); }} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" aria-label={`Clear ${label}`}><X size={15} /></button>}</div></label>{open && matches.length > 0 && <div className="absolute left-0 right-0 top-[4.7rem] z-20 border border-border bg-card shadow-lg">{matches.map((airport) => <button type="button" key={airport.code} onClick={() => { onChange(airport); setInput(`${airport.code} · ${airport.city}`); setOpen(false); }} className="block w-full border-b border-border px-3 py-3 text-left last:border-0 hover:bg-muted"><span className="block text-sm font-semibold">{airport.code} <span className="font-normal">— {airport.city}</span></span><span className="mt-1 block truncate text-xs text-muted-foreground">{airport.name}</span></button>)}</div>}</div>;
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function StatCard({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string | null;
+  note: string;
+}) {
+  return (
+    <div className="border border-border bg-card p-5">
+      <p className="editorial-label text-muted-foreground">{label}</p>
+      <div className="mt-3">
+        {value === null ? (
+          <Skeleton className="h-10 w-24" />
+        ) : (
+          <span className="text-4xl font-light tabular-nums">{value}</span>
+        )}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">{note}</p>
+    </div>
+  );
 }
 
-function LoadingPanel({ sources }: { sources: SourceSummary[] }) {
-  const displaySources = sources.length ? sources : SOURCE_CATALOG_FALLBACK;
-  return <section className="border-y border-border bg-muted/45"><div className="mx-auto max-w-7xl px-5 py-12 lg:px-10"><div className="flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="editorial-label text-primary">Fetching live fares</p><h2 className="mt-3 text-4xl">Watching the market.</h2></div><span className="text-sm text-muted-foreground">Results will appear as each source responds.</span></div><div className="mt-8 grid gap-px border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">{displaySources.map((source) => <div key={source.name} className="flex items-center justify-between bg-card px-4 py-4"><div className="flex items-center gap-3"><span className={`size-2 rounded-full ${source.status === "live" ? "bg-primary" : source.status === "unavailable" ? "bg-destructive" : "animate-pulse bg-accent"}`} /><div><p className="text-sm font-medium">{source.name}</p><p className="text-xs text-muted-foreground">{source.status === "searching" ? "Searching..." : source.status === "live" ? `${source.result_count} flights found` : displayStatus(source.status)}</p></div></div>{source.status === "live" ? <Check size={16} className="text-primary" /> : source.status === "searching" ? <Clock3 size={16} className="text-muted-foreground" /> : <span className="text-xs text-muted-foreground">—</span>}</div>)}</div></div></section>;
+function DataTypeBadge({
+  mix,
+  label,
+}: {
+  mix: { MOCK: number; LIVE: number };
+  label?: string;
+}) {
+  const badge = label ?? dataTypeBadge(mix);
+  const cls =
+    badge === "LIVE"
+      ? "bg-primary/10 text-primary border-primary/25"
+      : badge === "MIXED"
+      ? "bg-accent/20 text-accent-foreground border-accent/30"
+      : "bg-muted text-muted-foreground border-border";
+
+  return (
+    <span
+      className={`editorial-label inline-flex items-center gap-1 rounded border px-1.5 py-0.5 ${cls}`}
+    >
+      {badge === "LIVE" && <span className="size-1.5 rounded-full bg-primary" />}
+      {badge}
+    </span>
+  );
 }
-
-const SOURCE_CATALOG_FALLBACK: SourceSummary[] = ["IndiGo", "Air India", "Akasa Air", "SpiceJet", "MakeMyTrip", "Cleartrip", "EaseMyTrip", "ixigo"].map((name) => ({ name, type: ["MakeMyTrip", "Cleartrip", "EaseMyTrip", "ixigo"].includes(name) ? "OTA" : "Airline", status: "searching", result_count: 0, last_successful_fetch: null, response_time_ms: null, error: null }));
-
-function ResultsPanel(props: { query: SearchState; flights: FlightResult[]; lowest?: FlightResult; liveSources: SourceSummary[]; sort: SortKey; setSort: (sort: SortKey) => void; airlines: string[]; selectedAirline: string; setSelectedAirline: (value: string) => void; selectedStops: string; setSelectedStops: (value: string) => void; showFilters: boolean; setShowFilters: (value: boolean) => void; onRefresh: () => void; showSystem: boolean; setShowSystem: (value: boolean) => void; from: Airport | null; to: Airport | null; departure: string; passengers: string; cabin: string }) {
-  const { query, flights, lowest, liveSources, sort, setSort, airlines, selectedAirline, setSelectedAirline, selectedStops, setSelectedStops, showFilters, setShowFilters, onRefresh, showSystem, setShowSystem, from, to, departure, passengers, cabin } = props;
-  const allFailed = query.flights.length === 0 && query.sources.every((source) => source.status !== "live");
-  return <section className="border-t border-border"><div className="mx-auto max-w-7xl px-5 py-12 lg:px-10 lg:py-16"><div className="flex flex-col gap-5 border-b border-border pb-8 md:flex-row md:items-end md:justify-between"><div><p className="editorial-label text-primary">{from?.code ?? "—"} <span className="px-2 text-muted-foreground">→</span> {to?.code ?? "—"}</p><h2 className="mt-3 text-4xl">Live fares</h2><p className="mt-2 text-sm text-muted-foreground">{departure ? formatDate(departure) : "Date not set"} · {passengers} passenger · {cabin} · Prices retrieved moments ago</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={onRefresh} className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2.5 text-sm font-medium hover:bg-muted"><RefreshCw size={15} /> Refresh live fares</button><button type="button" onClick={() => setShowSystem(!showSystem)} className="inline-flex items-center gap-2 border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted"><Gauge size={15} /> System status</button></div></div>{showSystem && <SystemStatus query={query} onClose={() => setShowSystem(false)} />}{allFailed ? <div className="border-b border-border py-14"><CircleAlert className="text-destructive" size={22} /><h3 className="mt-4 text-3xl">Live fares couldn’t be retrieved right now.</h3><p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">No source returned a fare for this search. Try again shortly; no sample prices are shown.</p></div> : <><div className="grid gap-4 py-8 lg:grid-cols-[1.15fr_0.85fr]"><div className="border border-primary/25 bg-primary/5 p-6"><p className="editorial-label text-primary">Lowest live fare</p><div className="mt-4 flex flex-wrap items-end justify-between gap-4"><div><p className="text-5xl text-foreground">{formatINR(lowest?.total_fare)}</p><p className="mt-2 text-sm text-muted-foreground">{lowest?.airline ?? "Waiting for a live result"} {lowest?.stops === 0 ? "· Non-stop" : "· " + lowest?.stops + " stop"} {lowest ? `· ${formatDuration(lowest.duration_minutes)}` : ""}</p></div><span className="flex items-center gap-2 text-xs font-medium text-primary"><span className="size-2 rounded-full bg-primary" /> {lowest ? `Live · ${relativeAge(lowest.scraped_at)}` : "No live fare"}</span></div></div><ComparisonTable sources={query.sources} flights={query.flights} /></div><div className="flex flex-col gap-4 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between"><div><p className="editorial-label text-primary">{flights.length} available results</p><p className="mt-2 text-sm text-muted-foreground">{liveSources.length} live sources · {query.total_search_time_ms ? `completed in ${(query.total_search_time_ms / 1000).toFixed(1)}s` : "searching"}</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={() => setShowFilters(!showFilters)} className="inline-flex items-center gap-2 border border-border px-3 py-2 text-sm"><SlidersHorizontal size={15} /> Filters</button><label className="flex items-center gap-2 border border-border px-3 text-sm"><span className="text-muted-foreground">Sort</span><select value={sort} onChange={(event) => setSort(event.target.value as SortKey)} className="bg-transparent py-2 font-medium outline-none"><option value="cheapest">Cheapest</option><option value="fastest">Fastest</option><option value="earliest">Earliest departure</option></select><ChevronDown size={14} /></label></div></div>{showFilters && <div className="grid gap-3 border-b border-border bg-muted/35 p-4 sm:grid-cols-2 lg:grid-cols-4"><label className="text-sm"><span className="editorial-label mb-2 block text-muted-foreground">Airline</span><select value={selectedAirline} onChange={(event) => setSelectedAirline(event.target.value)} className="h-10 w-full border border-input bg-card px-3 text-sm"><option>All airlines</option>{airlines.map((airline) => <option key={airline}>{airline}</option>)}</select></label><label className="text-sm"><span className="editorial-label mb-2 block text-muted-foreground">Stops</span><select value={selectedStops} onChange={(event) => setSelectedStops(event.target.value)} className="h-10 w-full border border-input bg-card px-3 text-sm"><option>Any stops</option><option>Non-stop</option><option>With stops</option></select></label><div className="hidden items-end text-xs text-muted-foreground lg:flex">Price and time filters are available when live results include comparable values.</div></div>}<div className="mt-6 grid gap-3">{flights.length ? flights.map((flight) => <FlightCard key={flight.id} flight={flight} />) : <div className="border border-border p-8 text-center text-sm text-muted-foreground">No live flights match these filters.</div>}</div></>}</div></section>;
-}
-
-function ComparisonTable({ sources, flights }: { sources: SourceSummary[]; flights: FlightResult[] }) { return <div className="border border-border bg-card p-6"><div className="flex items-center justify-between"><p className="editorial-label text-foreground">Live price comparison</p><Filter size={15} className="text-muted-foreground" /></div><div className="mt-5 space-y-3">{sources.map((source) => { const cheapest = flights.filter((flight) => flight.source === source.name).sort((a, b) => a.total_fare - b.total_fare)[0]; return <div className="flex items-center justify-between gap-4 text-sm" key={source.name}><span className="flex items-center gap-2"><span className={`size-1.5 rounded-full ${source.status === "live" ? "bg-primary" : "bg-muted-foreground/45"}`} />{source.name}</span><span className={cheapest ? "font-semibold" : "text-muted-foreground"}>{cheapest ? formatINR(cheapest.total_fare) : displayStatus(source.status)}</span></div>; })}</div></div>; }
-
-function FlightCard({ flight }: { flight: FlightResult }) { return <article className="grid gap-5 border border-border bg-card p-5 transition-colors hover:border-primary/50 sm:grid-cols-[1fr_1.6fr_auto] sm:items-center"><div><p className="text-sm font-semibold">{flight.airline}</p><p className="mt-1 text-xs text-muted-foreground">{flight.flight_number ?? "Flight number not provided"}</p></div><div className="flex items-center gap-3"><div className="text-right"><p className="text-xl font-medium">{formatTime(flight.departure_time)}</p><p className="text-xs font-semibold text-muted-foreground">{flight.origin}</p></div><div className="min-w-20 flex-1 text-center"><p className="text-xs text-muted-foreground">{formatDuration(flight.duration_minutes)}</p><div className="my-2 flex items-center gap-1"><span className="h-px flex-1 bg-border" /><span className="size-1.5 rounded-full bg-primary" /><span className="h-px flex-1 bg-border" /></div><p className="text-xs text-muted-foreground">{flight.stops === 0 ? "Non-stop" : `${flight.stops} stop`}</p></div><div><p className="text-xl font-medium">{formatTime(flight.arrival_time)}</p><p className="text-xs font-semibold text-muted-foreground">{flight.destination}</p></div></div><div className="flex items-center justify-between gap-4 sm:flex-col sm:items-end"><div className="text-right"><p className="text-2xl font-medium">{formatINR(flight.total_fare)}</p><p className="mt-1 flex items-center justify-end gap-1 text-xs text-muted-foreground"><span className="size-1.5 rounded-full bg-primary" />{flight.source} · {relativeAge(flight.scraped_at)}</p></div>{flight.booking_url && <a href={flight.booking_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">View deal <ExternalLink size={13} /></a>}</div></article>; }
-
-function SystemStatus({ query, onClose }: { query: SearchState; onClose: () => void }) { const successful = query.sources.filter((source) => source.status === "live").length; return <aside className="my-6 border border-primary/25 bg-primary/5 p-5"><div className="flex items-start justify-between gap-4"><div><p className="editorial-label text-primary">Live search</p><h3 className="mt-2 text-2xl">System status</h3></div><button type="button" onClick={onClose} aria-label="Close system status"><X size={17} /></button></div><div className="mt-5 grid grid-cols-2 gap-4 text-sm sm:grid-cols-4"><div><p className="text-xs text-muted-foreground">Search ID</p><p className="mt-1 truncate font-mono text-xs">{query.search_id}</p></div><div><p className="text-xs text-muted-foreground">Sources queried</p><p className="mt-1 font-semibold">{query.sources.length}</p></div><div><p className="text-xs text-muted-foreground">Successful</p><p className="mt-1 font-semibold">{successful}</p></div><div><p className="text-xs text-muted-foreground">Flights retrieved</p><p className="mt-1 font-semibold">{query.flights.length}</p></div></div></aside>; }
