@@ -2,5 +2,13 @@
   "buildCommand": "npm run build",
   "framework": null,
   "installCommand": "npm install",
-  "outputDirectory": ".vercel/output"
+  "outputDirectory": ".vercel/output",
+  "env": {
+    "VITE_API_BASE_URL": "https://backend-awp6.vercel.app"
+  },
+  "build": {
+    "env": {
+      "VITE_API_BASE_URL": "https://backend-awp6.vercel.app"
+    }
+  }
 }
