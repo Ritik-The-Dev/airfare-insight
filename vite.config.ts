@@ -12,11 +12,15 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  nitro: {
+    // Use the Vercel preset when deploying — produces correct .vercel/output structure.
+    // Falls back to node-server for local dev.
+    preset: process.env.VERCEL ? "vercel" : "node-server",
+  },
   vite: {
     server: {
       proxy: {
-        // Proxy /api/* → FastAPI backend running on :8000
-        // This avoids CORS issues in dev and works even if VITE_API_BASE_URL is not set.
+        // Proxy /api/* → FastAPI backend running on :8000 in dev only.
         "/api": {
           target: "http://localhost:8000",
           changeOrigin: true,
