@@ -211,6 +211,33 @@ function CPIDashboard() {
       </section>
 
       {/* ------------------------------------------------------------------ */}
+      {/* WHATSAPP BANNER (top of dashboard)                                  */}
+      {/* ------------------------------------------------------------------ */}
+      <div className="mx-auto max-w-7xl px-5 pb-8 lg:px-10">
+        <a
+          href={WA_LINK}
+          target="_blank"
+          rel="noreferrer"
+          className="flex flex-col items-start justify-between gap-4 border border-primary/30 bg-primary/5 px-6 py-5 transition-colors hover:bg-primary/10 sm:flex-row sm:items-center"
+        >
+          <div className="flex items-start gap-4 sm:items-center">
+            <span className="text-2xl">💬</span>
+            <div>
+              <p className="text-sm font-semibold text-foreground">
+                New — Search flights directly on WhatsApp
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Message <span className="font-medium text-foreground">+91 99274 71836</span> — "Find cheapest flight Mumbai to Bangalore on 12 Sep" and get live results instantly.
+              </p>
+            </div>
+          </div>
+          <span className="editorial-label shrink-0 rounded border border-primary/30 bg-primary/10 px-3 py-1.5 text-primary">
+            Try on WhatsApp →
+          </span>
+        </a>
+      </div>
+
+      {/* ------------------------------------------------------------------ */}
       {/* INDEX HEADLINE                                                       */}
       {/* ------------------------------------------------------------------ */}
       <section className="page-rule mx-auto max-w-7xl px-5 py-12 lg:px-10 lg:py-16">
@@ -513,6 +540,13 @@ function CPIDashboard() {
       </section>
 
       {/* ------------------------------------------------------------------ */}
+      {/* WHATSAPP FEATURE                                                     */}
+      {/* ------------------------------------------------------------------ */}
+      <section className="page-rule mx-auto max-w-7xl px-5 py-12 lg:px-10 lg:py-16">
+        <WhatsAppSection />
+      </section>
+
+      {/* ------------------------------------------------------------------ */}
       {/* METHODOLOGY                                                          */}
       {/* ------------------------------------------------------------------ */}
       <section
@@ -663,5 +697,136 @@ function DataTypeBadge({
       {badge === "LIVE" && <span className="size-1.5 rounded-full bg-primary" />}
       {badge}
     </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp Feature Section
+// ---------------------------------------------------------------------------
+
+const WA_NUMBER = "919927471836"; // E.164 without +
+const WA_EXAMPLE = "Find the cheapest flight from Mumbai to Bangalore on 12th Sep 2026";
+const WA_LINK = `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(WA_EXAMPLE)}`;
+
+const EXAMPLE_QUERIES = [
+  "Cheapest flight Delhi to Mumbai tomorrow",
+  "Find me a flight from Bangalore to Goa this Saturday",
+  "Show me the fastest flight from Mumbai to Delhi",
+];
+
+function WhatsAppSection() {
+  return (
+    <div className="grid gap-0 overflow-hidden border border-border bg-card lg:grid-cols-[1fr_1fr]">
+      {/* Left: Feature description */}
+      <div className="flex flex-col justify-between p-8 lg:p-10">
+        {/* Badge */}
+        <div>
+          <span className="editorial-label inline-flex items-center gap-1.5 rounded border border-primary/25 bg-primary/8 px-2.5 py-1 text-primary">
+            <span className="size-1.5 rounded-full bg-primary" />
+            New · Natural Language Search
+          </span>
+
+          <h2 className="mt-5 text-4xl leading-tight">
+            Search flights on WhatsApp.
+          </h2>
+
+          <p className="mt-4 max-w-sm text-base leading-7 text-muted-foreground">
+            No website required. Just message FareLens your flight requirement in plain English and get live fare results — directly on WhatsApp.
+          </p>
+
+          {/* Phone number */}
+          <div className="mt-6 inline-flex items-center gap-3 rounded border border-border bg-background px-4 py-3">
+            <span className="text-lg">💬</span>
+            <div>
+              <p className="editorial-label text-muted-foreground">WhatsApp</p>
+              <p className="mt-0.5 font-semibold tracking-wide text-foreground">+91 99274 71836</p>
+            </div>
+          </div>
+
+          {/* Example queries */}
+          <div className="mt-8">
+            <p className="editorial-label text-muted-foreground">Try saying</p>
+            <ul className="mt-3 space-y-2">
+              {EXAMPLE_QUERIES.map((q) => (
+                <li key={q} className="flex items-start gap-2 text-sm text-muted-foreground">
+                  <span className="mt-0.5 shrink-0 text-primary">→</span>
+                  <span className="italic">"{q}"</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        {/* CTA button */}
+        <div className="mt-8">
+          <a
+            href={WA_LINK}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-12 items-center gap-3 bg-primary px-6 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            <span className="text-base">💬</span>
+            Search on WhatsApp
+          </a>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Opens WhatsApp with an example query pre-filled.
+          </p>
+        </div>
+      </div>
+
+      {/* Right: Mock WhatsApp conversation */}
+      <div className="flex items-center justify-center border-t border-border bg-muted/30 p-8 lg:border-l lg:border-t-0 lg:p-10">
+        <div className="w-full max-w-xs space-y-3">
+          {/* Header */}
+          <div className="flex items-center gap-3 rounded-t border border-border bg-card px-4 py-3">
+            <div className="flex size-8 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+              FL
+            </div>
+            <div>
+              <p className="text-sm font-semibold">FareLens</p>
+              <p className="text-xs text-muted-foreground">Flight Search Agent · Online</p>
+            </div>
+          </div>
+
+          {/* User bubble */}
+          <div className="flex justify-end">
+            <div className="max-w-[85%] rounded-l-2xl rounded-br-2xl rounded-tr-sm border border-border bg-primary/10 px-4 py-3 text-sm text-foreground">
+              Find cheapest flight Mumbai → BLR on 12 Sep ✈️
+              <p className="mt-1 text-right text-xs text-muted-foreground">10:32</p>
+            </div>
+          </div>
+
+          {/* Bot searching */}
+          <div className="flex justify-start">
+            <div className="max-w-[85%] rounded-r-2xl rounded-bl-sm rounded-tl-2xl border border-border bg-card px-4 py-3 text-sm text-foreground">
+              🔎 Searching live fares...
+              <p className="mt-1 text-xs text-muted-foreground">10:32</p>
+            </div>
+          </div>
+
+          {/* Bot result */}
+          <div className="flex justify-start">
+            <div className="max-w-[85%] rounded-r-2xl rounded-bl-sm rounded-tl-2xl border border-border bg-card px-4 py-3 text-sm text-foreground">
+              <p className="font-semibold">✈️ Best options found</p>
+              <div className="mt-2 space-y-1.5 border-t border-border pt-2">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">IndiGo</span>
+                  <span className="font-semibold">₹4,899</span>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Air India</span>
+                  <span className="font-semibold">₹5,120</span>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Akasa Air</span>
+                  <span className="font-semibold">₹5,310</span>
+                </div>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">Live fares · 10:32</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
